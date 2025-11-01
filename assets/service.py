@@ -30,12 +30,12 @@ class BlockChainService:
         self.network = network
         self.address_service = AddressService(network)
         self._tron = Tron()
-        self._tatum_base_url = settings.TATUM_BASE_URL
-        self._fernet = Fernet(settings.WALLET_ENCRYPTION_KEY.encode())
-        self._tatum_api_key = settings.TATUM_API_KEY
-        self._webhook_url = settings.WEBHOOK_URL
-        self._api_key = settings.TATUM_API_KEY
-        self._url = settings.TATUM_SUBSCRIBE_URL
+        # self._tatum_base_url = settings.TATUM_BASE_URL
+        # self._fernet = Fernet(settings.WALLET_ENCRYPTION_KEY.encode())
+        # self._tatum_api_key = settings.TATUM_API_KEY
+        # self._webhook_url = settings.WEBHOOK_URL
+        # self._api_key = settings.TATUM_API_KEY
+        # self._url = settings.TATUM_SUBSCRIBE_URL
 
 
 
@@ -270,26 +270,25 @@ class BlockChainService:
 
 class AddressService:
 
-    def __init__(self, symbol, network):
-        self.symbol = symbol
+    def __init__(self, network):
         self.network = network
 
     
-    def create_address(self, symbol, network):
+    def create_address(self):
 
         import os 
 
-        if network.upper() == "ETH":
+        if self.network.upper() == "ETH":
             return self._create_evm_address()
-        elif network.upper() == "TRX":
+        elif self.network.upper() == "TRX":
             return self._create_trx_address()
-        elif network.upper() in ['BTC', 'LTC']:
+        elif self.network.upper() in ['BTC', 'LTC']:
             secret = os.urandom(32)
-            if network.upper() == 'BTC':
+            if self.network.upper() == 'BTC':
                 return self._create_btc_address(secret)
             else:
                 return self._create_ltc_address(secret)
-        elif network.upper() == "SOL":
+        elif self.network.upper() == "SOL":
             return self._create_sol_address()
         
     def _create_evm_address(self):

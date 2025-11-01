@@ -11,11 +11,13 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
-
+from dotenv import load_dotenv
+import os 
 BASE_DIR = Path(__file__).resolve().parent.parent
 AUTH_USER_MODEL = "users.User"
 
 
+load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = 'django-insecure-cc^(jd+6crm=hr25*9ur^k#%d=w!z+^i7av&h9a)(=73sk1wfq'
 
@@ -157,3 +159,5 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+WALLET_ENCRYPTION_KEY = os.getenv("WALLET_ENCRYPTION_KEY")
