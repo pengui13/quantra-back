@@ -38,6 +38,7 @@ class Deposit(APIView):
         )
 
         balance = Balance.objects.get_or_create(user=user, asset=asset, network__name = network)
+        
         if balance.public:
             return Response({'address': balance.public})
         
@@ -48,9 +49,8 @@ class Deposit(APIView):
             private_key=private_key
         )
 
-        balance.public = address
-        balance.private = encrypted_private
- 
+        balance.public, balance.private  = address, encrypted_private
+        
         blockchain.subscribe_address(symbol, network, address)
 
         balance.save()
