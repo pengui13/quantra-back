@@ -6,7 +6,6 @@ from rest_framework.permissions import IsAuthenticated
 from .service import BlockChainService
 
 
-blockchain = BlockChainService()
 
 class AssetListView(APIView):
 
@@ -38,9 +37,11 @@ class Deposit(APIView):
         )
 
         balance = Balance.objects.get_or_create(user=user, asset=asset, network__name = network)
-        
+
         if balance.public:
             return Response({'address': balance.public})
+        
+        blockchain = BlockChainService(symbol, network)
         
         address_result = blockchain.address_service.create_address(network)
         address, private_key = address_result
@@ -51,7 +52,7 @@ class Deposit(APIView):
 
         balance.public, balance.private  = address, encrypted_private
         
-        blockchain.subscribe_address(symbol, network, address)
+        #blockchain.subscribe_address(symbol, network, address)
 
         balance.save()
 
