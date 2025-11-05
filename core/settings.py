@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'core',
     'corsheaders',
     'assets',
+    "channels"
 ]
 
 
@@ -64,7 +65,11 @@ REST_FRAMEWORK = {
     ),
     
 }
+ASGI_APPLICATION = "daphne.asgi.application"   # <-- replace project_name
 
+CHANNEL_LAYERS = {
+    "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}
+}
 SPECTACULAR_SETTINGS = {
     "TITLE": "Quantra API",
     "DESCRIPTION": "API documentation for Quantra project",
