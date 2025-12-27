@@ -7,7 +7,6 @@ class Network(models.Model):
     min_deposit_amount = models.DecimalField(max_digits=15, decimal_places=8, default=0)
     min_deposit_time = models.IntegerField(default=0)
 
-    # ✅ Add APR range here
     apr_low = models.FloatField(default=0)
     apr_high = models.FloatField(default=0)
 
@@ -25,7 +24,8 @@ class Asset(models.Model):
     name = models.CharField(max_length=100)
     rate = models.DecimalField(max_digits=20, decimal_places=6, default=0)
     networks = models.ManyToManyField(Network, related_name="assets", blank=True)
-
+    fiat = models.BooleanField(default = False)
+    staking = models.BooleanField(default = False)
     class Meta:
         db_table = 'assets'
 

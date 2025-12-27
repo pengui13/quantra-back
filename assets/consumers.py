@@ -18,10 +18,9 @@ jwt_auth = JWTAuthentication()
 
 class BalanceStreamConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
-        # Try session auth first (AuthMiddlewareStack)
         user = self.scope.get("user")
 
-        # If anonymous, try to authenticate via JWT (Authorization header or ?token=)
+        # Try JWT if anonymous
         if not user or getattr(user, "is_anonymous", True):
             token = self._extract_bearer_from_headers() or self._extract_token_from_query()
             if token:
@@ -42,18 +41,14 @@ class BalanceStreamConsumer(AsyncJsonWebsocketConsumer):
     async def _loop_push(self):
         try:
             while True:
-                value_str = await self._compute_total_value_usdt(self.user.id)
-                await self.send_json({"value": value_str})
+                payload = await self._compute_total_value_with_rate(self.user.id)
+                await self.send_json(payload)
                 await asyncio.sleep(2)
         except asyncio.CancelledError:
             pass
 
     # -------- auth helpers --------
     def _extract_bearer_from_headers(self):
-        """
-        Reads 'authorization' header from ASGI scope headers.
-        Returns raw JWT string or None.
-        """
         headers = dict(self.scope.get("headers") or [])
         auth = headers.get(b"authorization")
         if not auth:
@@ -67,9 +62,6 @@ class BalanceStreamConsumer(AsyncJsonWebsocketConsumer):
         return None
 
     def _extract_token_from_query(self):
-        """
-        Allows ws://.../ws/balances/?token=<JWT> (or 'Bearer <JWT>').
-        """
         try:
             qs = (self.scope.get("query_string") or b"").decode()
             token = (parse_qs(qs).get("token") or [None])[0]
@@ -81,9 +73,6 @@ class BalanceStreamConsumer(AsyncJsonWebsocketConsumer):
 
     @sync_to_async
     def _authenticate_token(self, token: str):
-        """
-        Validates JWT using DRF SimpleJWT and returns the user.
-        """
         try:
             validated = jwt_auth.get_validated_token(token)
             return jwt_auth.get_user(validated)
@@ -92,38 +81,65 @@ class BalanceStreamConsumer(AsyncJsonWebsocketConsumer):
 
     # -------- data logic --------
     @sync_to_async
-    def _compute_total_value_usdt(self, user_id: int) -> str:
+    def _compute_total_value_with_rate(self, user_id: int) -> dict:
         """
-        Sum over user's balances:
-            sum( available(asset) * latest_quote(asset).value_in_usd )
-        Return as string with 2 decimals (USDT-style).
+        Compute total balances in user's preferred currency.
+        Returns: { value: "123.45", currency: "EUR" }
         """
-        total = Decimal("0")
+        from users.models import User  # import user model here
 
+        total_usd = Decimal("0")
+
+        # sum all balances in USD
         balances = (
-            Balance.objects
-            .select_related("asset")
+            Balance.objects.select_related("asset")
             .filter(user_id=user_id)
             .only("available", "asset_id")
         )
 
         for bal in balances:
             q = (
-                Quote.objects
-                .filter(asset_id=bal.asset_id)
+                Quote.objects.filter(asset_id=bal.asset_id)
                 .order_by("-time")
                 .only("value_in_usd")
                 .first()
             )
             if not q or q.value_in_usd is None:
                 continue
-
             try:
-                avail = Decimal(bal.available)
-                px = Decimal(q.value_in_usd)
+                total_usd += Decimal(bal.available) * Decimal(q.value_in_usd)
             except Exception:
                 continue
 
-            total += (avail * px)
+        # get user's preferred fiat
+        user = User.objects.filter(id=user_id).select_related("preferred_currency").first()
+        fiat_asset = user.preferred_currency if user and user.preferred_currency else None
 
-        return str(total.quantize(DECIMAL_PLACES, rounding=ROUND_DOWN))
+        if not fiat_asset:
+            # fallback to USD
+            return {
+                "value": str(total_usd.quantize(DECIMAL_PLACES, rounding=ROUND_DOWN)),
+                "currency": "USD",
+            }
+
+        # get latest quote for fiat asset
+        fiat_quote = (
+            Quote.objects.filter(asset_id=fiat_asset.id)
+            .order_by("-time")
+            .only("value_in_usd")
+            .first()
+        )
+
+        if not fiat_quote or not fiat_quote.value_in_usd:
+            rate = Decimal("1")
+        else:
+            rate = Decimal(fiat_quote.value_in_usd)
+
+        # convert USD to fiat
+        total_fiat = total_usd / rate
+
+
+        return {
+            "value": str(total_fiat.quantize(DECIMAL_PLACES, rounding=ROUND_DOWN)),
+            "currency": fiat_asset.symbol,
+        }

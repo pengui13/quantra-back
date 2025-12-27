@@ -6,9 +6,10 @@ kraken_client = KrakenService()
 
 
 class Command(BaseCommand):
-    help = "Populate Assets and Networks from Kraken API with defaults (includes APR ranges)"
+    help = "Populate Assets and Networks from Kraken API with defaults (includes APR ranges and fiat assets)"
 
     def handle(self, *args, **options):
+        # --- Networks configuration ---
         NETWORKS = [
             {"name": "BTC", "full_name": "Bitcoin Network", "confirmations": 2, "min_deposit_amount": 0.0005, "apr_low": 0.5, "apr_high": 1.5},
             {"name": "ETH", "full_name": "Ethereum Mainnet (ERC20)", "confirmations": 12, "min_deposit_amount": 0.01, "apr_low": 3.0, "apr_high": 5.0},
@@ -35,23 +36,15 @@ class Command(BaseCommand):
                     "apr_high": net["apr_high"],
                 },
             )
-
-            # If exists, update fields
             if not created:
                 obj.full_name = net["full_name"]
                 obj.confirmations = net["confirmations"]
                 obj.min_deposit_amount = net["min_deposit_amount"]
                 obj.apr_low = net["apr_low"]
                 obj.apr_high = net["apr_high"]
-                obj.save(update_fields=[
-                    "full_name",
-                    "confirmations",
-                    "min_deposit_amount",
-                    "apr_low",
-                    "apr_high",
-                ])
+                obj.save(update_fields=["full_name", "confirmations", "min_deposit_amount", "apr_low", "apr_high"])
 
-        # --- Assets population ---
+        # --- Assets configuration ---
         allowed_pairs = [
             "XBTUSDT", "ETHUSDT", "TIAUSDT", "ATOMUSDT", "DYMUSDT",
             "DOTUSDT", "TRXUSDT", "GRTUSDT", "DOGEUSDT", "KSMUSDT"
@@ -69,6 +62,8 @@ class Command(BaseCommand):
             "DOGE": "Dogecoin",
             "KSM": "Kusama",
             "USDT": "Tether",
+            "EUR": "Euro", 
+            "USD": "US Dollar", 
         }
 
         ASSET_NETWORKS = {
@@ -79,12 +74,18 @@ class Command(BaseCommand):
             "DYM": ["DYM"],
             "DOT": ["DOT"],
             "TRX": ["TRX"],
-            "GRT": ["ETH"],     # ERC20
+            "GRT": ["ETH"],  # ERC20
             "DOGE": ["DOGE"],
             "KSM": ["KSM"],
             "USDT": ["ETH", "TRX"],
         }
 
+        # --- Define staking assets ---
+        STAKING_ASSETS = ["ETH", "TIA", "ATOM", "DYM", "DOT", "KSM"]
+
+        FIAT_ASSETS = ["EUR", "USD"]
+
+        # --- Populate crypto assets ---
         data = kraken_client.get_asset_pairs()["result"]
 
         for key in allowed_pairs:
@@ -92,29 +93,64 @@ class Command(BaseCommand):
             if symbol == "XBT":
                 symbol = "BTC"
 
+            is_staking = symbol in STAKING_ASSETS
+
             asset, created = Asset.objects.get_or_create(
                 symbol=symbol,
-                defaults={"name": ASSET_NAMES.get(symbol, symbol)}
+                defaults={
+                    "name": ASSET_NAMES.get(symbol, symbol), 
+                    "fiat": False,
+                    "staking": is_staking,
+                }
             )
-
             if not created:
                 asset.name = ASSET_NAMES.get(symbol, symbol)
-                asset.save(update_fields=["name"])
+                asset.fiat = False
+                asset.staking = is_staking
+                asset.save(update_fields=["name", "fiat", "staking"])
 
             network_names = ASSET_NETWORKS.get(symbol, [])
             networks = Network.objects.filter(name__in=network_names)
             asset.networks.set(networks)
 
-        # --- Ensure USDT exists with ETH + TRX networks ---
+        # --- Populate USDT ---
         usdt_asset, _ = Asset.objects.get_or_create(
             symbol="USDT",
-            defaults={"name": ASSET_NAMES["USDT"]}
+            defaults={
+                "name": ASSET_NAMES["USDT"], 
+                "fiat": False,
+                "staking": False,
+            }
         )
         usdt_asset.name = ASSET_NAMES["USDT"]
-        usdt_asset.save(update_fields=["name"])
-
+        usdt_asset.fiat = False
+        usdt_asset.staking = False
+        usdt_asset.save(update_fields=["name", "fiat", "staking"])
         eth_network = Network.objects.get(name="ETH")
         trx_network = Network.objects.get(name="TRX")
         usdt_asset.networks.set([eth_network, trx_network])
 
-        self.stdout.write(self.style.SUCCESS("✅ Assets and Networks populated or updated successfully."))
+        # --- Populate fiat assets ---
+        for fiat_symbol in FIAT_ASSETS:
+            asset, created = Asset.objects.get_or_create(
+                symbol=fiat_symbol,
+                defaults={
+                    "name": ASSET_NAMES[fiat_symbol], 
+                    "fiat": True,
+                    "staking": False,
+                }
+            )
+            if not created:
+                asset.name = ASSET_NAMES[fiat_symbol]
+                asset.fiat = True
+                asset.staking = False
+                asset.save(update_fields=["name", "fiat", "staking"])
+
+        # --- Summary output ---
+        staking_count = Asset.objects.filter(staking=True).count()
+        total_count = Asset.objects.count()
+        
+        self.stdout.write(self.style.SUCCESS(f"✅ Assets and Networks populated or updated successfully."))
+        self.stdout.write(self.style.SUCCESS(f"📊 Total Assets: {total_count}"))
+        self.stdout.write(self.style.SUCCESS(f"⛓️  Staking Assets: {staking_count}"))
+        self.stdout.write(self.style.SUCCESS(f"Staking assets: {', '.join(STAKING_ASSETS)}"))
