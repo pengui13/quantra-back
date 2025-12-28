@@ -17,6 +17,12 @@ from rest_framework import status
 from assets.models import Asset, Quote
 from assets.serializers import AssetSerializer
 
+from django.db.models import Sum, DecimalField
+from django.db.models.functions import Coalesce
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from staking.models import StakePending, StakingRewards
+from assets.models import Asset, Balance
 
 class AssetListView(APIView):
 
@@ -46,7 +52,7 @@ class AssetListView(APIView):
                     )
                 )
                 .distinct()
-                .prefetch_related("networks")  # Add this to prefetch networks
+                .prefetch_related("networks")
             )
 
             data = []
@@ -78,7 +84,6 @@ class AssetListView(APIView):
                     if preferred_quote and preferred_quote.value_in_usd else None
                 )
 
-                # Get networks for this asset
                 networks_data = [
                     {
                         "id": network.id,
@@ -97,23 +102,104 @@ class AssetListView(APIView):
                     "value_usd": float(value_usd),
                     "value_preferred": float(value_preferred) if value_preferred else None,
                     "preferred_currency": preferred_asset.symbol if preferred_asset else None,
-                    "networks": networks_data,  # Add networks info
+                    "networks": networks_data,
                 })
 
             return Response(data)
 
         # =========================
-        # EXISTING SECTIONS
+        # STAKING SECTION
         # =========================
-        if section == "stake":
+        elif section == "stake":
+            if not user:
+                return Response([])
+
             assets = (
                 Asset.objects
                 .filter(fiat=False, staking=True, networks__apr_high__gt=0)
                 .distinct()
                 .prefetch_related("networks")
             )
-            return Response(AssetSerializer(assets, many=True).data)
 
+            data = []
+
+            for asset in assets:
+                # Get user's staking balance (from StakePending model)
+                staking_balance = StakePending.objects.filter(
+                    user=user,
+                    asset=asset
+                ).aggregate(
+                    total=Coalesce(Sum("amount"), 0, output_field=DecimalField(max_digits=15, decimal_places=8))
+                )["total"]
+
+                # Get user's staking rewards (from StakingRewards model)
+                total_rewards = StakingRewards.objects.filter(
+                    user=user,
+                    asset=asset
+                ).aggregate(
+                    total=Coalesce(Sum("amount"), 0, output_field=DecimalField(max_digits=15, decimal_places=8))
+                )["total"]
+
+                # Get pending rewards (accumulated but not yet claimed)
+                pending_rewards = StakePending.objects.filter(
+                    user=user,
+                    asset=asset
+                ).aggregate(
+                    total=Coalesce(Sum("rewards"), 0, output_field=DecimalField(max_digits=15, decimal_places=8))
+                )["total"]
+
+                # Get available balance for staking
+                available_balance = (
+                    Balance.objects
+                    .filter(user=user, asset=asset)
+                    .aggregate(
+                        total=Coalesce(Sum("available"), 0, output_field=DecimalField(max_digits=20, decimal_places=8))
+                    )["total"]
+                )
+
+                # Get latest quote for value calculation
+                asset_quote = (
+                    Quote.objects
+                    .filter(asset=asset)
+                    .order_by("-time")
+                    .first()
+                )
+
+                value_in_usd = float(staking_balance) * float(asset_quote.value_in_usd) if asset_quote else 0
+
+                # Get network info (APR, etc.)
+                network = asset.networks.first()
+                apr_low = float(network.apr_low) if network and network.apr_low else 0
+                apr_high = float(network.apr_high) if network and network.apr_high else 0
+
+                data.append({
+                    "id": asset.id,
+                    "symbol": asset.symbol,
+                    "full_name": asset.name,
+                    "quantity": float(staking_balance),
+                    "total_reward": float(total_rewards),
+                    "pending_reward": float(pending_rewards),
+                    "avail": float(available_balance),
+                    "value": value_in_usd,
+                    "networks": [
+                        {
+                            "id": network.id,
+                            "name": network.name,
+                            "apr_low": apr_low,
+                            "apr_high": apr_high,
+                        }
+                    ] if network else [],
+                })
+
+            return Response(data)
+
+        # =========================
+        # STAKE SECTION (for asset list)
+        # =========================
+
+        # =========================
+        # FIAT SECTION
+        # =========================
         elif section == "fiat":
             assets = Asset.objects.filter(fiat=True)
             data = []
@@ -136,6 +222,9 @@ class AssetListView(APIView):
 
             return Response(data)
 
+        # =========================
+        # DEFAULT SECTION
+        # =========================
         else:
             assets = Asset.objects.filter(fiat=False).prefetch_related("networks")
             return Response(AssetSerializer(assets, many=True).data)
