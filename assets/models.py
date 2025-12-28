@@ -1,5 +1,6 @@
 from django.db import models
 
+from decimal import Decimal
 class Network(models.Model):
     name = models.CharField(max_length=100)
     full_name = models.CharField(max_length=200)
@@ -18,6 +19,88 @@ class Network(models.Model):
 
     def __repr__(self):
         return f"<Network name={self.name}>"
+
+
+class Transaction(models.Model):
+    """Model to track all cryptocurrency transactions (deposits, withdrawals, etc.)"""
+    
+    DEPOSIT = 'deposit'
+    WITHDRAWAL = 'withdrawal'
+    TRANSFER = 'transfer'
+    
+    TRANSACTION_TYPES = [
+        (DEPOSIT, 'Deposit'),
+        (WITHDRAWAL, 'Withdrawal'),
+        (TRANSFER, 'Transfer'),
+    ]
+    
+    PENDING = 'pending'
+    COMPLETED = 'completed'
+    FAILED = 'failed'
+    CANCELLED = 'cancelled'
+    
+    STATUS_CHOICES = [
+        (PENDING, 'Pending'),
+        (COMPLETED, 'Completed'),
+        (FAILED, 'Failed'),
+        (CANCELLED, 'Cancelled'),
+    ]
+    
+    id = models.BigAutoField(primary_key=True)
+    user = models.ForeignKey( 'users.User', on_delete=models.CASCADE, related_name='transactions')
+    asset = models.ForeignKey('Asset', on_delete=models.PROTECT, related_name='transactions')
+    network = models.ForeignKey('Network', on_delete=models.PROTECT, related_name='transactions')
+    
+    type = models.CharField(max_length=20, choices=TRANSACTION_TYPES)
+    amount = models.DecimalField(max_digits=20, decimal_places=8)
+    fee = models.DecimalField(max_digits=20, decimal_places=8, default=Decimal('0'))
+    
+    from_address = models.CharField(max_length=255, blank=True, null=True)
+    to_address = models.CharField(max_length=255, blank=True, null=True)
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=PENDING)
+    timestamp = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    blockchain_hash = models.CharField(max_length=255, blank=True, null=True, unique=True)
+    confirmations = models.IntegerField(default=0)
+    
+    description = models.TextField(blank=True, null=True)
+    error_message = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['user', '-timestamp']),
+            models.Index(fields=['status', 'type']),
+            models.Index(fields=['asset', 'user']),
+        ]
+    
+    def __str__(self):
+        return f"{self.get_type_display()} - {self.amount} {self.asset.symbol} ({self.get_status_display()})"
+    
+    def mark_completed(self, blockchain_hash=None):
+        from django.utils import timezone
+        self.status = self.COMPLETED
+        self.completed_at = timezone.now()
+        if blockchain_hash:
+            self.blockchain_hash = blockchain_hash
+        self.save()
+    
+    def mark_failed(self, error_message=None):
+        """Mark transaction as failed and restore balance"""
+        from django.utils import timezone
+        self.status = self.FAILED
+        self.completed_at = timezone.now()
+        if error_message:
+            self.error_message = error_message
+        self.save()
+        
+        if self.type == self.WITHDRAWAL:
+            balance = Balance.objects.get(user=self.user, asset=self.asset)
+            balance.available += self.amount
+            balance.pending_withdrawal -= self.amount
+            balance.save()
 
 class Asset(models.Model):
     symbol = models.CharField(max_length=20)
